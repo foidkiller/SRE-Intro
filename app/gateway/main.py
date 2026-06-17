@@ -17,7 +17,6 @@ NOTIFICATIONS_URL = os.getenv("NOTIFICATIONS_URL", "")
 app = FastAPI()
 client = httpx.AsyncClient(timeout=5.0)
 
-# Простой rate limiter
 rate_hits = {}
 
 def can_make_request(path):
@@ -77,7 +76,6 @@ async def pay(reservation_id: str):
             content={"error": "payments_unavailable", "message": "Payment service is down"}
         )
 
-    # Fire and forget notification
     if NOTIFICATIONS_URL:
         asyncio.create_task(
             client.post(f"{NOTIFICATIONS_URL}/notify", json={"reservation_id": reservation_id})
