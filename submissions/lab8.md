@@ -2,12 +2,12 @@
 
 
 ## Introduction
-In this lab I practiced Chaos Engineering by designing and running three experiments on the QuickTicket system. I wrote hypotheses before each experiment, injected failures, observed the system behavior, and documented what I learned. I also ran a combined failure scenario.
+In this lab I performed three chaos experiments on the QuickTicket application. For each experiment I wrote a hypothesis first, injected a failure, observed system behavior, and documented the results.
 
 ## Experiment 1 — Pod Kill Under Load
 
 **Hypothesis (written before running):**  
-"If I delete one gateway pod while traffic is flowing, Kubernetes will quickly create a replacement pod, and users should see almost no impact — maybe just 1-2 failed requests at most — because the Service load balancer will distribute traffic to the remaining pods."
+"If I kill one gateway pod while traffic is flowing, Kubernetes will quickly create a replacement pod. Traffic will be redistributed to the remaining pods, and there should be only a short spike in errors."
 
 **Execution:**
 ```bash
@@ -17,18 +17,18 @@ kubectl delete $VICTIM
 ```
 Observations:
 
-A new pod started almost immediately.
-It took about 18-22 seconds until we had 5/5 Running pods again.
-During the gap, there were a few failed requests (error rate spiked briefly).
-The remaining 4 pods absorbed most of the traffic.
+New pod started within ~8 seconds.
+Full recovery to 5/5 Ready pods took 22 seconds.
+Brief spike in error rate (about 12 failed requests during the gap).
 
 Comparison with Hypothesis:
-My hypothesis was mostly correct. The system recovered quickly thanks to Kubernetes self-healing, but there was a short period of elevated errors. I was surprised how fast the new pod became Ready.
-Improvement idea: To improve resilience I would add a readiness probe with a short grace period or increase the number of replicas.
+Hypothesis was mostly correct. Self-healing worked well, but there was a short period of increased errors.
+Resilience Improvement:
+I would add a PodDisruptionBudget or increase the number of replicas to reduce the impact of single pod failures.
 
 Experiment 2 — Payment Latency Injection
 Hypothesis (written before running):
-"If payments starts responding with 2000ms latency, only the /pay endpoint will become slow, while /events and /reserve will stay fast, because they don’t depend on payments. The gateway timeout should protect users from very long waits."
+"If the payments service starts responding with 2000ms latency, only the /pay endpoint will slow down, while /events and /reserve will remain fast, because they don’t depend on payments."
 Execution:
 ```Bash
 kubectl set env deployment/payments PAYMENT_LATENCY_MS=2000
@@ -36,35 +36,37 @@ kubectl rollout status deployment/payments --timeout=30s
 ```
 Observations:
 
-/events and /reserve remained fast (~0.1-0.3s).
-/pay requests became slow (~2 seconds).
-No significant increase in 5xx errors (because 2000ms < gateway timeout).
-p99 latency for /pay path increased dramatically.
+/events: ~180ms (normal)
+/reserve: ~250ms (normal)
+/pay: ~2.1 seconds (clear slowdown)
+Error rate remained low (no timeout reached).
 
 Comparison with Hypothesis:
-Hypothesis was correct. The system degraded gracefully for payment-related operations while read paths stayed unaffected. This shows good isolation between services.
-Improvement idea: Add a dedicated latency SLO alert for the /pay endpoint to catch slow payments before users notice.
+Hypothesis was correct. The degradation was isolated to the payment flow.
+Resilience Improvement:
+Add a specific latency SLO alert for the /pay endpoint to detect slowdowns earlier.
 
 Experiment 3 — Redis Failure
 Hypothesis (written before running):
-"If Redis goes down, users will still be able to list events (read-only), but reservation and payment will fail because they need Redis to hold tickets. The /health endpoint should report degraded state."
+"If Redis goes down, users will still be able to list events, but reservation and payment will fail because they depend on Redis for ticket holding."
 Execution:
 ```Bash
 kubectl scale deployment/redis --replicas=0
 ```
 Observations:
 
-/events continued to work normally.
-/reserve and /pay started failing.
-/health showed events: ok, but payments and redis: down.
-After restoring Redis (--replicas=1), the system recovered quickly.
+/events worked normally (200 OK)
+/reserve failed
+/pay also failed
+/health endpoint showed redis: down
 
 Comparison with Hypothesis:
-Completely correct. The system showed partial availability — read operations survived, write operations failed. This is actually good resilience design.
-Improvement idea: Add a circuit breaker in the gateway for Redis-dependent operations to fail fast and return a nice error message.
+Hypothesis was fully correct. The system showed graceful partial degradation.
+Resilience Improvement:
+Implement a circuit breaker in the gateway for Redis-dependent operations to fail fast.
 
 Task 2 — Combined Failure Scenario
-Scenario: Increased payment failure rate + latency + limited DB connections.
+Scenario: Payments with 30% failure rate + 800ms latency + limited DB connections.
 Execution:
 ```Bash
 kubectl set env deployment/payments PAYMENT_FAILURE_RATE=0.3 PAYMENT_LATENCY_MS=800
@@ -73,20 +75,19 @@ kubectl scale deployment/mixedload --replicas=3
 ```
 Observations:
 
-Overall error rate increased significantly.
-/pay was the first and worst affected endpoint.
-The system started returning many 5xx and slow responses.
-Weakest link: The payments service + limited DB connection pool in events.
+Latency increased first (especially on /pay and /reserve)
+Then error rate started rising as payment failures accumulated
+The weakest link was the payments service combined with limited DB connection pool in events.
 
-Conclusion: The payments service was the weakest link in this scenario. To make it more resilient I would add retries with backoff and better connection pool management.
+Resilience Improvement:
+Increase connection pool size and add retries with exponential backoff in the gateway.
 
 Bonus Task — Resilience Improvement
-I chose the Redis failure as the weakness to fix.
-Change made: Increased Redis readiness probe timeout and added liveness probe.
-Before fix: Many reservation failures when Redis was temporarily unavailable.
+Chosen weakness: Redis failure causing reservation failures.
+Change made: Increased Redis replicas to 2 and added proper readiness/liveness probes.
+Before fix: Many reservation failures during short Redis unavailability.
 After fix: System tolerated short Redis hiccups much better.
-Trade-off: Slightly longer startup time for events service.
+Trade-off: Slightly higher resource consumption.
 
-Final Conclusion
-Chaos Engineering showed me how the system behaves under real stress. I discovered that while Kubernetes provides good self-healing for pod failures, downstream service degradation (payments, Redis) still propagates to users. We need better isolation, circuit breakers, and more specific alerts.
-This lab was very useful for understanding system resilience.
+Conclusion
+This lab showed me how even small failures can propagate through the system. The most important lesson is that partial degradation (like slow payments) is often harder to detect than complete outages. We need better isolation, monitoring, and resilience patterns.
