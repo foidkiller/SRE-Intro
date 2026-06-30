@@ -1,113 +1,108 @@
-# Lab 5 — CI/CD & GitOps
+# Lab 6 — Alerting & Incident Response
 
 
-## Objective
-The goal of this laboratory work was to implement a complete CI/CD pipeline using GitHub Actions and establish a GitOps workflow with ArgoCD for the QuickTicket application.
+## Introduction
+In this lab I set up SLO-based alerts in Grafana, simulated an incident, responded to it using my runbook, and wrote a blameless postmortem. It was one of the most interesting labs because I finally got to practice real incident handling.
 
-## Task 1 — CI Pipeline and ArgoCD Setup (6 points)
+## Task 1 — Alerts and Incident Response
 
-### 1.1 GitHub Actions CI Pipeline
-I created the file `.github/workflows/ci.yml` from scratch. The workflow is triggered on every push to the `main` branch. It builds and pushes Docker images for all three services (`gateway`, `events`, and `payments`) to GitHub Container Registry (`ghcr.io`).
-
-
-### 1.2 Verification of Pushed Images
-After the pipeline completed successfully, I verified that all three container images were published:
+### Starting the Stack
+I launched the full monitoring stack and started generating traffic:
 
 ```bash
-gh api user/packages?package_type=container --jq '.[].name'
+cd ~/SRE-Intro/app
+docker compose -f docker-compose.yaml -f ../docker-compose.monitoring.yaml up -d --build
+./loadgen/run.sh 5 600 &
 ```
-Images successfully pushed:
+Contact Point
+Created a Webhook contact point in Grafana using webhook.site. The test notification arrived successfully.
+Alert Rules
+1. High Error Rate (Critical)
 
-quickticket-gateway
-quickticket-events
-quickticket-payments
+Name: QuickTicket High Error Rate
+PromQL: sum(rate(gateway_requests_total{status=~"5.."}[5m])) / sum(rate(gateway_requests_total[5m])) * 100 > 10
+Condition: Is Above 10, evaluated every 1m for 2m
+Labels: severity=critical
 
-1.3 Kubernetes Manifests Update
-I updated all manifests in the k8s/ directory to use images from the GitHub Container Registry:
+2. SLO Burn Rate (Warning)
 
-Changed imagePullPolicy from Never to Always
-Added imagePullSecrets to each Deployment
+Created a second alert for error budget burn rate.
 
-Example (excerpt from gateway.yaml):
-```YAML
-spec:
-  containers:
-    - name: gateway
-      image: ghcr.io/foidkiller/quickticket-gateway:${{ github.sha }}
-      imagePullPolicy: Always
-  imagePullSecrets:
-    - name: ghcr-secret
-```
-1.4 ArgoCD Installation
-```Bash
-kubectl create namespace argocd
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-kubectl wait --for=condition=Available deployment/argocd-server -n argocd --timeout=300s
-```
-1.5 ArgoCD Application
-I created the ArgoCD Application using the CLI:
-```Bash
-argocd app create quickticket \
-  --repo https://github.com/foidkiller/SRE-Intro.git \
-  --path k8s \
-  --dest-server https://kubernetes.default.svc \
-  --dest-namespace default \
-  --sync-policy automated \
-  --auto-prune \
-  --self-heal \
-  --upsert
-```
-Verification:
-```Bash
-argocd app get quickticket
-```
-Result:
+Runbook
+Runbook: QuickTicket High Error Rate
+Alert
 
-Sync Status: Synced
-Health Status: Healthy
+Fires when gateway 5xx error rate exceeds 10% for 2 minutes.
 
-1.6 GitOps Loop Test
-I made a visible change in k8s/gateway.yaml (added a version label), committed and pushed it. ArgoCD automatically detected the change and synchronized it to the cluster.
-Verification command:
-```Bash
-kubectl get deployment gateway -o jsonpath='{.metadata.labels.version}'
-```
-# Output: v2
+Diagnosis Steps
 
-Task 2 — Rollback via GitOps (4 points)
-2.1 Deploying a Broken Version
-I intentionally changed the image tag in k8s/gateway.yaml to a non-existent version:
-```YAML
-image: ghcr.io/foidkiller/quickticket-gateway:does-not-exist
-```
-After pushing the changes, ArgoCD attempted to sync, and the gateway pod entered ImagePullBackOff state.
-Proof:
-```Bash
-argocd app get quickticket
-kubectl get pods -l app=gateway
-```
-2.2 Rollback
-I performed a rollback using Git:
-```Bash
-git revert HEAD --no-edit
-git push origin main
-```
-ArgoCD automatically synchronized the reverted state, and the application returned to a healthy condition.
-Recovery time: Approximately 1.5 minutes after the push.
-Git history:
-```Bash
-git log --oneline -3
-```
+Check overall health: curl -s http://localhost:3080/health | python3 -m json.tool
+Check payments service: curl -s http://localhost:8082/health
+Look at logs: docker compose logs payments --tail=50 and gateway logs
+Check PAYMENT_FAILURE_RATE environment variable
 
-Bonus Task — Automated Image Tag Update (2 points)
-I implemented logic in the CI workflow that automatically updates image tags in the Kubernetes manifests after building new images and commits the changes back to the repository (with protection against infinite CI loops).
+Common Fixes
 
+Payments service down → restart it
+High failure rate → set PAYMENT_FAILURE_RATE=0 and restart
+Events issues → restart events service
+
+If not fixed in 10 minutes — escalate to instructor/TA.
+Incident Simulation
+I simulated a failure by setting PAYMENT_FAILURE_RATE=0.5 in the payments service.
+What happened:
+
+Injected the failure
+After a few minutes the High Error Rate alert fired
+Followed my runbook, found the problem in payments
+Fixed it by restoring normal settings
+Alert went back to normal
+
+The runbook really helped me stay organized during the incident.
+Task 2 — Blameless Postmortem
+Postmortem: Payments Service Failure Rate Spike
+Summary
+During testing I increased the failure rate in the payments service. This caused a rise in 5xx errors on the gateway and triggered our alert. We were able to detect and resolve the issue following the runbook.
+Timeline
+
+Failure injected
+Alert fired after a few minutes
+Started investigation using the runbook
+Identified payments service as the root cause
+Restored normal operation
+Alert resolved
+
+Root Cause
+The system did not have enough visibility into the health and failure rate of the payments service. A configuration change in a downstream component was able to affect user-facing error rates before being caught early.
+What Went Well
+
+The alert worked and we got notified
+The runbook provided useful steps and helped quickly find the problem
+We recovered the service fairly fast
+
+What Went Wrong
+
+The pending period delayed detection a bit
+No dedicated alert for the payments service itself
+Could have had more specific checks for environment variables in the runbook
+
+| Action                          | Owner    | Priority |
+| ------------------------------- | -------- | -------- |
+| Add alert for payments failures | SRE Team | High     |
+| Reduce alert waiting time       | SRE Team | High     |
+| Improve runbook                 | SRE Team | Medium   |
+| Add failure scenario tests      | Dev Team | Medium   |
+
+
+The most important action item: Adding a dedicated alert for the payments service.
+Why: It would catch the issue much earlier before it starts impacting users and burning the error budget.
+Bonus Task — Second Runbook
+Runbook: Redis Unavailable
+
+Trigger: Increase in reservation failures or Redis connection errors
+Diagnosis: Check gateway health, events logs, and redis logs
+Fix: Restart Redis container and then the events service if needed
+
+Tested it myself — the runbook is clear and leads to fast recovery.
 Conclusion
-In this lab I successfully implemented a modern CI/CD and GitOps workflow:
-
-Automated container image building and publishing using GitHub Actions
-Declarative deployment and synchronization using ArgoCD
-Full GitOps cycle: code change so build so deploy
-Safe rollback capability through Git
-
-This laboratory demonstrated the power and reliability of GitOps practices, which provide better traceability, reproducibility, and recovery compared to manual deployments.
+This lab gave me good hands-on experience with alerting, incident response, and writing postmortems. I now better understand how important clear runbooks and proper monitoring are in real SRE work.
