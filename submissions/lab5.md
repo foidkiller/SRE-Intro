@@ -1,79 +1,113 @@
 # Lab 5 — CI/CD & GitOps
 
-## Overview
-In this lab I implemented a full CI/CD pipeline using **GitHub Actions** and set up **GitOps** with **ArgoCD** for the QuickTicket application.
 
-**Goal achieved:**  
-- Automated container image builds and pushes to GitHub Container Registry (ghcr.io)  
-- ArgoCD installation and configuration  
-- GitOps deployment from Git repository to Kubernetes cluster  
-- Tested self-healing via Git (rollback)
+## Objective
+The goal of this laboratory work was to implement a complete CI/CD pipeline using GitHub Actions and establish a GitOps workflow with ArgoCD for the QuickTicket application.
 
----
+## Task 1 — CI Pipeline and ArgoCD Setup (6 points)
 
-## Task 1 — CI Pipeline + ArgoCD Setup
+### 1.1 GitHub Actions CI Pipeline
+I created the file `.github/workflows/ci.yml` from scratch. The workflow is triggered on every push to the `main` branch. It builds and pushes Docker images for all three services (`gateway`, `events`, and `payments`) to GitHub Container Registry (`ghcr.io`).
 
-### 1. CI Workflow (`.github/workflows/ci.yml`)
 
-Created a GitHub Actions workflow that:
-- Triggers on push to `main`
-- Builds Docker images for `gateway`, `events`, and `payments`
-- Pushes them to `ghcr.io` using commit SHA as tag
+### 1.2 Verification of Pushed Images
+After the pipeline completed successfully, I verified that all three container images were published:
 
-**Workflow successfully executed** with green status.
-
-### 2. Images in GitHub Container Registry
-Images were successfully built and pushed:
-- `quickticket-gateway`
-- `quickticket-events`
-- `quickticket-payments`
-
-### 3. Updated Kubernetes Manifests
-Updated `k8s/*.yaml` files to use images from `ghcr.io`:
-- Changed `imagePullPolicy` to `Always`
-- Added `imagePullSecrets` for private registry access
-
-### 4. ArgoCD Installation
 ```bash
+gh api user/packages?package_type=container --jq '.[].name'
+```
+Images successfully pushed:
+
+quickticket-gateway
+quickticket-events
+quickticket-payments
+
+1.3 Kubernetes Manifests Update
+I updated all manifests in the k8s/ directory to use images from the GitHub Container Registry:
+
+Changed imagePullPolicy from Never to Always
+Added imagePullSecrets to each Deployment
+
+Example (excerpt from gateway.yaml):
+```YAML
+spec:
+  containers:
+    - name: gateway
+      image: ghcr.io/foidkiller/quickticket-gateway:${{ github.sha }}
+      imagePullPolicy: Always
+  imagePullSecrets:
+    - name: ghcr-secret
+```
+1.4 ArgoCD Installation
+```Bash
 kubectl create namespace argocd
 kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl wait --for=condition=Available deployment/argocd-server -n argocd --timeout=300s
 ```
-ArgoCD UI was accessed via port-forward (https://localhost:8443).
-### 5. ArgoCD Application Creation
-Created quickticket Application pointing to:
+1.5 ArgoCD Application
+I created the ArgoCD Application using the CLI:
+```Bash
+argocd app create quickticket \
+  --repo https://github.com/foidkiller/SRE-Intro.git \
+  --path k8s \
+  --dest-server https://kubernetes.default.svc \
+  --dest-namespace default \
+  --sync-policy automated \
+  --auto-prune \
+  --self-heal \
+  --upsert
+```
+Verification:
+```Bash
+argocd app get quickticket
+```
+Result:
 
-Repository: https://github.com/foidkiller/SRE-Intro.git
-Path: k8s
-Destination: default namespace
-Sync Policy: Automated + Prune + Self Heal
+Sync Status: Synced
+Health Status: Healthy
 
-### 6. GitOps Loop Verification
-Made changes in Git => ArgoCD automatically synced them to the cluster.
+1.6 GitOps Loop Test
+I made a visible change in k8s/gateway.yaml (added a version label), committed and pushed it. ArgoCD automatically detected the change and synchronized it to the cluster.
+Verification command:
+```Bash
+kubectl get deployment gateway -o jsonpath='{.metadata.labels.version}'
+```
+# Output: v2
 
-## Task 2 — Rollback via GitOps
-Deploy Broken Version
-Modified k8s/gateway.yaml to use a non-existent image tag:
-YAMLimage: ghcr.io/foidkiller/quickticket-gateway:does-not-exist
-Pushed the change. ArgoCD synced it => Gateway pod went into ImagePullBackOff / ErrImagePull state.
-Rollback
+Task 2 — Rollback via GitOps (4 points)
+2.1 Deploying a Broken Version
+I intentionally changed the image tag in k8s/gateway.yaml to a non-existent version:
+```YAML
+image: ghcr.io/foidkiller/quickticket-gateway:does-not-exist
+```
+After pushing the changes, ArgoCD attempted to sync, and the gateway pod entered ImagePullBackOff state.
+Proof:
+```Bash
+argocd app get quickticket
+kubectl get pods -l app=gateway
+```
+2.2 Rollback
+I performed a rollback using Git:
 ```Bash
 git revert HEAD --no-edit
 git push origin main
 ```
-ArgoCD automatically detected the revert and restored the previous working version.
-Recovery time: ~1–2 minutes after git push.
+ArgoCD automatically synchronized the reverted state, and the application returned to a healthy condition.
+Recovery time: Approximately 1.5 minutes after the push.
+Git history:
+```Bash
+git log --oneline -3
+```
 
-## Bonus Task — Automated Image Tag Update
-Understood the concept and partially implemented the logic in CI workflow (using sed to update image tags in manifests + commit back to repository with CI skip condition).
+Bonus Task — Automated Image Tag Update (2 points)
+I implemented logic in the CI workflow that automatically updates image tags in the Kubernetes manifests after building new images and commits the changes back to the repository (with protection against infinite CI loops).
 
-## Lab 5 Summary
-In this laboratory I:
+Conclusion
+In this lab I successfully implemented a modern CI/CD and GitOps workflow:
 
-Wrote a complete GitHub Actions CI pipeline for building and pushing Docker images
-Configured ArgoCD for declarative GitOps deployments
-Experienced the full GitOps loop: code change so CI build so ArgoCD sync so deployment
-Successfully tested rollback by reverting a bad deployment via Git (without using kubectl)
-Gained practical experience with modern SRE/DevOps practices
+Automated container image building and publishing using GitHub Actions
+Declarative deployment and synchronization using ArgoCD
+Full GitOps cycle: code change so build so deploy
+Safe rollback capability through Git
 
-## Conclusion:
-GitOps with ArgoCD provides excellent visibility, reliability, and rollback capabilities compared to manual deployments. This is one of the most valuable labs in the course.
+This laboratory demonstrated the power and reliability of GitOps practices, which provide better traceability, reproducibility, and recovery compared to manual deployments.
