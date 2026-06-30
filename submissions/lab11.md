@@ -1,80 +1,139 @@
 # Lab 11 — Advanced Microservice Patterns
 
-## Task 1 — Notifications Service + Retries
+## Introduction
 
-I created a notifications service (based on payments service with a `/notify` endpoint).
+The objective of this lab was to improve the resilience of the QuickTicket microservice application by implementing several common reliability patterns. During the lab, I added retries with exponential backoff, a notifications service, a circuit breaker, a rate limiter, and bulkhead isolation. Each feature was tested under failure conditions to evaluate its effectiveness.
 
-I also added a `call_with_retry` function with exponential backoff and jitter.
+---
 
-### Test 1 — Fire-and-forget notifications
+# Task 1 — Notifications Service and Retries
 
-- Set `NOTIFY_FAILURE_RATE=0.4`
-- Ran 30 checkout requests
-- All 30 requests completed successfully (ok=30, fail=0)
-- `/pay` latency stayed low because notifications were not blocking the request
+## Notifications Service
 
-### Test 2 — Retries
+A new **Notifications** service was created based on the existing Payments service. The service exposes a `/notify` endpoint and is invoked asynchronously after successful payment processing.
 
-- Set `PAYMENT_FAILURE_RATE=0.3`
-- Most payments succeeded after retries
-- Metric `gateway_retry_total{result="retried"}` increased
+To avoid affecting user response time, notifications were implemented using a fire-and-forget approach. Notification failures do not block or fail the checkout request.
 
-## Task 2 — Circuit Breaker + Rate Limiter
+### Fire-and-Forget Test
 
-### Circuit Breaker
+Configuration:
 
-Implemented a simple state machine:
+* `NOTIFY_FAILURE_RATE=0.4`
+* 30 checkout requests were executed.
 
-- CLOSED
-- OPEN
-- HALF_OPEN
+### Observations
 
-Results:
+* All 30 checkout requests completed successfully.
+* Notification failures did not affect the checkout workflow.
+* Payment latency remained low because notification delivery was asynchronous.
 
-- When payments failed 100% of the time, the circuit opened
-- Gateway returned fast 503 responses instead of waiting
-- After recovery and 30 second cooldown, the circuit closed again
+### Conclusion
 
-### Rate Limiter
+The fire-and-forget pattern successfully isolated notification failures from the critical payment path, improving overall application resilience.
 
-Implemented a sliding window rate limiter with a limit of 10 RPS.
+---
 
-Results:
+## Retry Mechanism
 
-- Sent a burst of 30 requests
-- Many requests returned `429 Too Many Requests`
-- `Retry-After: 1` header was present
+A reusable `call_with_retry()` helper function was implemented using exponential backoff with randomized jitter.
 
-## Bonus Task — Bulkhead Isolation
+### Test Configuration
 
-Implemented a bulkhead for payments by limiting concurrent requests.
+* `PAYMENT_FAILURE_RATE=0.3`
 
-### Test
+### Observations
 
-- Set `PAYMENT_LATENCY_MS=3000`
+* Most failed payment requests succeeded after one or more retry attempts.
+* The retry metric `gateway_retry_total{result="retried"}` increased as expected.
+* Users experienced fewer failed payment requests despite transient downstream failures.
 
-Without bulkhead:
+### Conclusion
 
-- `/events` also became slow
-- Event loop resources were affected
+The retry mechanism improved reliability during temporary service failures while reducing unnecessary request failures.
 
-With bulkhead:
+---
 
-- `/events` stayed fast
-- `/pay` returned 503 when limit was reached
+# Task 2 — Circuit Breaker and Rate Limiter
 
-### Observation
+## Circuit Breaker
 
-Bulkhead helped protect other parts of the system from a slow dependency.
+A simple circuit breaker state machine was implemented with three states:
 
-## Conclusion
+* **CLOSED**
+* **OPEN**
+* **HALF_OPEN**
 
-In this lab I implemented four important resilience patterns:
+### Test Results
 
-- Retry with backoff and jitter
-- Circuit Breaker
-- Rate Limiter
-- Bulkhead
+When the Payments service was configured to fail continuously:
 
-These changes made the system more reliable when downstream services fail or become slow.
+* The circuit transitioned to the **OPEN** state.
+* The Gateway immediately returned HTTP **503 Service Unavailable** responses instead of waiting for downstream timeouts.
+* After the configured cooldown period (30 seconds), the circuit entered the **HALF_OPEN** state.
+* Successful requests closed the circuit and normal processing resumed.
 
+### Conclusion
+
+The circuit breaker prevented repeated calls to an unhealthy dependency and significantly reduced unnecessary waiting time.
+
+---
+
+## Rate Limiter
+
+A sliding-window rate limiter was implemented with a limit of **10 requests per second**.
+
+### Test Results
+
+A burst of 30 requests was generated.
+
+Observed behavior:
+
+* Requests above the configured limit returned **HTTP 429 Too Many Requests**.
+* The response included the `Retry-After: 1` header.
+* Requests within the configured rate limit continued to succeed normally.
+
+### Conclusion
+
+The rate limiter successfully protected the application from excessive request bursts while providing clients with guidance on when to retry.
+
+---
+
+# Bonus Task — Bulkhead Isolation
+
+Bulkhead isolation was implemented by limiting the number of concurrent requests sent to the Payments service.
+
+### Test Configuration
+
+* `PAYMENT_LATENCY_MS=3000`
+
+### Results
+
+**Without Bulkhead**
+
+* Slow payment requests occupied shared execution resources.
+* The `/events` endpoint also experienced increased latency.
+* Overall application responsiveness degraded.
+
+**With Bulkhead**
+
+* `/events` continued responding normally.
+* `/pay` returned HTTP 503 when the concurrency limit was reached.
+* Other application components remained responsive despite the slow dependency.
+
+### Conclusion
+
+Bulkhead isolation successfully contained the impact of a slow downstream service and prevented cascading performance degradation.
+
+---
+
+# Final Conclusion
+
+This lab demonstrated several important resilience patterns commonly used in distributed systems:
+
+* Retry with exponential backoff and jitter
+* Fire-and-forget asynchronous notifications
+* Circuit Breaker
+* Sliding-window Rate Limiter
+* Bulkhead Isolation
+
+Together, these patterns significantly improved the application's ability to tolerate temporary failures, slow downstream services, and bursts of incoming traffic. They also reduced the likelihood of cascading failures and improved the overall reliability of the QuickTicket microservice architecture.
