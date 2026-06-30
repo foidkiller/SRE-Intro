@@ -1,127 +1,126 @@
-# Lab 10 - SRE Portfolio & Reliability Review
+# Lab 10 — SRE Portfolio & Reliability Review
 
 ## Load Test Results
 
-I ran load tests with Locust inside the cluster.
+Load testing was performed using Locust running inside the Kubernetes cluster. The goal was to identify the application's capacity limits and observe how system reliability changed under increasing load.
 
-| Users | Ramp | Duration | RPS   | p50   | p95   | p99   | 5xx Error Rate | Notes                  |
-| ----- | ---- | -------- | ----- | ----- | ----- | ----- | -------------- | ---------------------- |
-| 10    | 2/s  | 60s      | 7.7   | 8ms   | 16ms  | 37ms  | 0%             | Stable                 |
-| 50    | 5/s  | 60s      | 31.24 | 170ms | 740ms | 990ms | 15.34%         | System started to fail |
+| Users | Ramp Rate | Duration |   RPS |    p50 |    p95 |    p99 | 5xx Error Rate | Observation                               |
+| ----: | --------: | -------: | ----: | -----: | -----: | -----: | -------------: | ----------------------------------------- |
+|    10 | 2 users/s |     60 s |  7.70 |   8 ms |  16 ms |  37 ms |             0% | Stable performance with no errors         |
+|    50 | 5 users/s |     60 s | 31.24 | 170 ms | 740 ms | 990 ms |         15.34% | Increased latency and elevated error rate |
 
 ### Breaking Point
 
-The system started to degrade at about 50 users and around 31 RPS.
+The system began to degrade at approximately **50 concurrent users** (about **31 requests per second**).
 
-I saw more 500, 502 and 503 errors and higher response times.
+The following symptoms were observed:
+
+* Increased response latency.
+* Growing number of HTTP 500, 502, and 503 responses.
+* Higher request failure rate.
+* Reduced overall system responsiveness.
+
+These observations indicate that the application reached its current capacity limit under sustained load.
 
 ---
 
-## DORA Metrics
+# DORA Metrics
 
 ### Deployment Frequency
 
-Medium.
-
-I deployed new versions many times during the labs.
+Deployment frequency was **medium**. Throughout the course, application updates were deployed regularly using the GitOps workflow.
 
 ### Lead Time for Changes
 
-Usually a few minutes.
-
-After git push, ArgoCD deployed changes automatically.
+Lead time was typically only a few minutes. After pushing changes to Git, ArgoCD automatically synchronized and deployed the updated manifests.
 
 ### Change Failure Rate
 
-Around 10% to 15%.
-
-This is based on failed canary deployments and chaos testing.
+The estimated change failure rate was **10–15%**, primarily due to failed canary deployments and intentionally injected failures during chaos engineering experiments.
 
 ### Time to Restore Service
 
-Usually 10 to 30 seconds.
-
-Argo Rollouts abort helped restore service quickly.
+The average time to restore service ranged from **10 to 30 seconds**. Automatic rollback through Argo Rollouts significantly reduced recovery time after unsuccessful deployments.
 
 ---
 
-## Top 3 Reliability Risks
+# Top Three Reliability Risks
 
-### 1. Downstream Service Problems
+## 1. Downstream Service Dependencies
 
-If payments or Redis has problems, gateway can also have problems.
+Failures in Redis or the Payments service directly affect request processing in the Gateway. Introducing circuit breakers and graceful degradation mechanisms would improve resilience.
 
-Better circuit breakers are needed.
+## 2. Database Storage Reliability
 
-### 2. Database Storage Risk
+Without a PersistentVolumeClaim, PostgreSQL data can be lost when the database pod is recreated. Persistent storage is essential for production deployments.
 
-Before adding PVC, PostgreSQL could lose data after pod restart.
+## 3. Monitoring Coverage
 
-### 3. Monitoring Gaps
-
-Only error rate was monitored.
-
-Latency and partial failures need more alerts.
+Current monitoring focuses primarily on application errors. Additional alerts should cover latency, dependency health, and partial service degradation.
 
 ---
 
-## Toil Identification
+# Toil Identification
 
-| Toil                                  | Frequency       | Automation Idea          |
-| ------------------------------------- | --------------- | ------------------------ |
-| Manual port-forward                   | Many times      | Create script            |
-| Manual Redis FLUSHDB                  | Every load test | Automatic cleanup        |
-| Manual pod deletion for chaos testing | Several times   | Use Chaos Mesh or Litmus |
+| Manual Task                   | Frequency             | Proposed Automation             |
+| ----------------------------- | --------------------- | ------------------------------- |
+| Port forwarding to Prometheus | Frequent              | Shell script or Makefile target |
+| Redis database cleanup        | Before each load test | Automated cleanup job           |
+| Manual chaos experiments      | Several times         | Chaos Mesh or LitmusChaos       |
 
-These tasks are repetitive and should be automated.
-
----
-
-## Monitoring Gaps
-
-Some monitoring improvements are still needed:
-
-* No alert for high p99 latency on `/pay`
-* No separate health alert for payments service
-* No Redis health alert
-* No circuit breaker metrics
+These repetitive operational tasks consume engineering time without providing long-term value and should be automated whenever possible.
 
 ---
 
-## Capacity Plan for 2x Traffic
+# Monitoring Gaps
 
-If traffic becomes two times higher, I would use:
+Several important monitoring capabilities are still missing:
 
-* Gateway: 8 to 10 replicas
-* Events: 4 to 5 replicas
-* Payments: 4 replicas and circuit breaker
-* Redis with replication
+* Alert for high p99 latency on the `/pay` endpoint.
+* Dedicated health alert for the Payments service.
+* Redis availability alert.
+* Metrics for circuit breaker activations and downstream failures.
+* Service Level Objective (SLO) monitoring for latency and availability.
 
-Estimated monthly cost would be around $30 to $50 for a small cluster.
-
----
-
-## Most Important Improvement
-
-The most important improvement would be:
-
-**Add circuit breakers and latency SLO alerts.**
-
-This would help detect problems faster and stop failures from affecting users.
+Adding these alerts would improve incident detection and reduce mean time to identify problems.
 
 ---
 
-## Final Thoughts
+# Capacity Plan for Double Traffic
 
-During this course I learned:
+If application traffic doubled, the following scaling strategy would be appropriate:
 
-* Docker and containers
-* Monitoring with Prometheus and Grafana
-* Kubernetes
-* GitOps with ArgoCD
-* Canary deployments
-* Chaos engineering
-* Database backup and recovery
-* Reliability engineering concepts
+| Component  | Recommended Scaling                               |
+| ---------- | ------------------------------------------------- |
+| Gateway    | 8–10 replicas                                     |
+| Events     | 4–5 replicas                                      |
+| Payments   | 4 replicas with circuit breaker support           |
+| Redis      | Replication enabled                               |
+| PostgreSQL | Persistent storage with regular automated backups |
 
-The labs helped me understand how modern SRE and DevOps systems work in practice.
+Estimated infrastructure cost for a small Kubernetes cluster would be approximately **$30–50 per month**, depending on the cloud provider and storage configuration.
+
+---
+
+# Highest-Priority Improvement
+
+The highest-priority improvement would be implementing **circuit breakers together with latency-based SLO alerts**.
+
+Circuit breakers would prevent cascading failures when downstream services become unavailable, while latency alerts would allow operators to detect performance degradation before it becomes visible to end users.
+
+---
+
+# Final Reflection
+
+Throughout this course, I gained practical experience with modern SRE and cloud-native technologies, including:
+
+* Docker and containerization
+* Kubernetes orchestration
+* Prometheus and Grafana monitoring
+* GitOps using ArgoCD
+* Progressive delivery with Argo Rollouts
+* Chaos Engineering
+* Database migration, backup, and disaster recovery
+* Reliability engineering principles and operational best practices
+
+This portfolio demonstrated how infrastructure automation, observability, deployment strategies, and resilience techniques work together to build reliable distributed systems. The course significantly improved my understanding of Site Reliability Engineering and the practical challenges involved in operating production services.
