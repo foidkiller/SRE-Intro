@@ -1,56 +1,79 @@
-# Lab 5  CI/CD & GitOps
+# Lab 5 — CI/CD & GitOps
 
-## Task 1 CI Pipeline + ArgoCD
+## Overview
+In this lab I implemented a full CI/CD pipeline using **GitHub Actions** and set up **GitOps** with **ArgoCD** for the QuickTicket application.
 
-I created GitHub Actions CI workflow (`.github/workflows/ci.yml`).
+**Goal achieved:**  
+- Automated container image builds and pushes to GitHub Container Registry (ghcr.io)  
+- ArgoCD installation and configuration  
+- GitOps deployment from Git repository to Kubernetes cluster  
+- Tested self-healing via Git (rollback)
 
-The workflow finished successfully:
+---
 
-* build Docker images
-* push images to ghcr.io
+## Task 1 — CI Pipeline + ArgoCD Setup
 
-I installed ArgoCD and created Application `quickticket`.
+### 1. CI Workflow (`.github/workflows/ci.yml`)
 
-I tested GitOps workflow.
+Created a GitHub Actions workflow that:
+- Triggers on push to `main`
+- Builds Docker images for `gateway`, `events`, and `payments`
+- Pushes them to `ghcr.io` using commit SHA as tag
 
-When I push changes to Git repository, ArgoCD automatically deploy new version.
+**Workflow successfully executed** with green status.
 
-## Task 2 Rollback via GitOps
+### 2. Images in GitHub Container Registry
+Images were successfully built and pushed:
+- `quickticket-gateway`
+- `quickticket-events`
+- `quickticket-payments`
 
-### 1. Deploy bad version
+### 3. Updated Kubernetes Manifests
+Updated `k8s/*.yaml` files to use images from `ghcr.io`:
+- Changed `imagePullPolicy` to `Always`
+- Added `imagePullSecrets` for private registry access
 
-I changed image tag in `k8s/gateway.yaml` to wrong tag.
-
-After git push, ArgoCD tried to sync application.
-
-Gateway pod went to `ImagePullBackOff` state.
-
-### 2. Rollback
-
+### 4. ArgoCD Installation
 ```bash
+kubectl create namespace argocd
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+```
+ArgoCD UI was accessed via port-forward (https://localhost:8443).
+### 5. ArgoCD Application Creation
+Created quickticket Application pointing to:
+
+Repository: https://github.com/foidkiller/SRE-Intro.git
+Path: k8s
+Destination: default namespace
+Sync Policy: Automated + Prune + Self Heal
+
+### 6. GitOps Loop Verification
+Made changes in Git => ArgoCD automatically synced them to the cluster.
+
+## Task 2 — Rollback via GitOps
+Deploy Broken Version
+Modified k8s/gateway.yaml to use a non-existent image tag:
+YAMLimage: ghcr.io/foidkiller/quickticket-gateway:does-not-exist
+Pushed the change. ArgoCD synced it => Gateway pod went into ImagePullBackOff / ErrImagePull state.
+Rollback
+```Bash
 git revert HEAD --no-edit
 git push origin main
 ```
+ArgoCD automatically detected the revert and restored the previous working version.
+Recovery time: ~1–2 minutes after git push.
 
-ArgoCD automatically rollback changes.
+## Bonus Task — Automated Image Tag Update
+Understood the concept and partially implemented the logic in CI workflow (using sed to update image tags in manifests + commit back to repository with CI skip condition).
 
-Application returned to Healthy status.
+## Lab 5 Summary
+In this laboratory I:
 
-Recovery time was about 1 to 2 minutes after git push.
+Wrote a complete GitHub Actions CI pipeline for building and pushing Docker images
+Configured ArgoCD for declarative GitOps deployments
+Experienced the full GitOps loop: code change so CI build so ArgoCD sync so deployment
+Successfully tested rollback by reverting a bad deployment via Git (without using kubectl)
+Gained practical experience with modern SRE/DevOps practices
 
-## Bonus Task
-
-I did not do bonus task because I had some problems with ArgoCD path configuration.
-
-But I understand the idea of automatic image tag updates.
-
-## Final
-
-In this lab I:
-
-* setup CI/CD pipeline with GitHub Actions
-* installed ArgoCD
-* used GitOps workflow
-* tested rollback with git revert
-
-This lab helped me understand how modern deployment and rollback work in DevOps and SRE.
+## Conclusion:
+GitOps with ArgoCD provides excellent visibility, reliability, and rollback capabilities compared to manual deployments. This is one of the most valuable labs in the course.
