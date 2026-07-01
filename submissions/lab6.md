@@ -1,349 +1,368 @@
-Lab 6 — Alerting & Incident Response
+# Lab 6 — Alerting & Incident Response
 
-============================================================
-Task 1 — Alerts, Runbook and Incident Response
-============================================================
+> **Course:** DevOps / Monitoring & Observability  
+> **Lab:** 6  
+> **Student:** Ravil Khusnutdinov  
+> **Date:** June 17, 2026
 
-1. Alert Rules in Grafana
+---
 
-Alert 1: QuickTicket High Error Rate (Critical)
+# Task 1 — Alerts, Runbook and Incident Response
 
-Name:
-QuickTicket High Error Rate
+## 1. Alert Rules in Grafana
 
-PromQL:
-sum(rate(gateway_requests_total{status=~"5.."}[5m])) / sum(rate(gateway_requests_total[5m])) * 100 > 10
+### Alert 1 — QuickTicket High Error Rate (Critical)
 
-Condition:
-IS ABOVE 10
+| Parameter | Value |
+|-----------|-------|
+| **Name** | `QuickTicket High Error Rate` |
+| **Severity** | Critical |
+| **Condition** | IS ABOVE **10** |
+| **Evaluate Every** | 1 minute |
+| **Pending Period** | 2 minutes |
+| **Label** | `severity=critical` |
 
-Evaluate every:
-1m
+### PromQL
 
-For:
-2m (pending)
+```promql
+sum(rate(gateway_requests_total{status=~"5.."}[5m]))
+/
+sum(rate(gateway_requests_total[5m]))
+* 100 > 10
+```
 
-Labels:
-severity=critical
+### Annotations
 
-Annotations:
-Summary:
+**Summary**
+
+```text
 High error rate detected: {{ $value | printf "%.2f" }}%
+```
 
-Description:
-Gateway is returning too many 5xx errors. Immediate investigation required.
+**Description**
 
+```text
+Gateway is returning too many 5xx errors.
+Immediate investigation required.
+```
 
-------------------------------------------------------------
+---
 
-Alert 2: QuickTicket SLO Burn Rate (Warning)
+### Alert 2 — QuickTicket SLO Burn Rate (Warning)
 
-Name:
-QuickTicket SLO Burn Rate
+| Parameter | Value |
+|-----------|-------|
+| **Name** | `QuickTicket SLO Burn Rate` |
+| **Severity** | Warning |
+| **Condition** | IS ABOVE **6** |
+| **Evaluate Every** | 1 minute |
+| **Pending Period** | 5 minutes |
+| **Label** | `severity=warning` |
 
-PromQL:
-(1 - (sum(rate(gateway_requests_total{status!~"5.."}[30m])) / sum(rate(gateway_requests_total[30m])))) / (1 - 0.995) > 6
+### PromQL
 
-Condition:
-IS ABOVE 6
+```promql
+(1 - (
+  sum(rate(gateway_requests_total{status!~"5.."}[30m]))
+  /
+  sum(rate(gateway_requests_total[30m]))
+))
+/
+(1 - 0.995)
+> 6
+```
 
-Evaluate every:
-1m
+---
 
-For:
-5m
+# 2. Contact Point & Notification Policy
 
-Labels:
-severity=warning
+## Contact Point
 
-============================================================
-2. Contact Point & Notification Policy
-============================================================
+**Type**
 
-Contact Point:
+```
 Webhook
+```
+
+**Endpoint**
+
+```
 https://webhook.site/b395b256-1ac3-4478-8193-ba329270ebf2
+```
 
-Successfully tested:
-Received full JSON payload.
+**Status**
 
-Notification Policy:
+✅ Successfully tested. Full JSON payload received.
 
-Default contact point:
-quickticket-alerts
+---
 
-Group by:
-alertname
+## Notification Policy
 
-Group wait:
-30s
+| Setting | Value |
+|---------|-------|
+| Default Contact Point | `quickticket-alerts` |
+| Group By | `alertname` |
+| Group Wait | 30 seconds |
+| Repeat Interval | 5 minutes |
 
-Repeat interval:
-5m
+---
 
-============================================================
-3. Runbook: QuickTicket High Error Rate
-============================================================
+# 3. Runbook — QuickTicket High Error Rate
 
-Alert:
-Fires when gateway 5xx error rate exceeds 10% for 2 minutes.
+## Alert
 
-Diagnosis Steps:
+This alert fires when the **gateway 5xx error rate exceeds 10% for more than two minutes.**
 
-1. Check global health:
+---
+
+## Diagnosis Steps
+
+### 1. Check gateway health
+
+```bash
 curl -s http://localhost:3080/health | python3 -m json.tool
+```
 
-2. Check individual services health.
+### 2. Check health of individual services
 
-3. Review recent logs:
+Verify that:
+
+- Gateway
+- Payments
+- Events
+- Reservations
+
+are healthy.
+
+### 3. Review recent logs
+
+```bash
 docker compose logs --tail=100 gateway payments
+```
 
-4. Check Prometheus for payments_requests_total metrics.
+### 4. Verify Prometheus metrics
 
-Common Causes & Mitigation
+Check:
 
-Cause:
-High PAYMENT_FAILURE_RATE
+```text
+payments_requests_total
+```
 
-Identification:
-payments health OK, but errors in logs
+---
 
-Resolution:
-Set env var to 0.0 and restart Payments
+## Common Causes & Mitigation
 
+| Cause | Identification | Resolution |
+|--------|---------------|------------|
+| High `PAYMENT_FAILURE_RATE` | Payments service healthy but logs contain failures | Set environment variable to `0.0` and restart Payments |
+| Payments container crashed | `docker compose ps` shows service stopped | `docker compose up -d payments` |
+| Events service unavailable | Health endpoint fails | Restart Events service |
+| Database issues | Connection errors in Events logs | Verify PostgreSQL and restart Events |
 
-Cause:
-Payments container crashed
+---
 
-Identification:
-docker compose ps shows not running
+## Escalation
 
-Resolution:
-docker compose up -d payments
+If the issue is **not resolved within 10 minutes**, notify the **team lead**.
 
+---
 
-Cause:
-Events service down
+# 4. Incident Simulation & Response
 
-Identification:
-events health check fails
+## Failure Injection
 
-Resolution:
-Restart events
+```bash
+PAYMENT_FAILURE_RATE=0.8 \
+docker compose \
+-f docker-compose.yaml \
+-f ../docker-compose.monitoring.yaml \
+up -d payments
+```
 
+---
 
-Cause:
-Database issues
+## Incident Timeline
 
-Identification:
-Connection errors in events logs
+| Time | Event |
+|------|-------|
+| **14:52:00** | Failure injected (`PAYMENT_FAILURE_RATE=0.8`) |
+| **14:55:12** | Alert entered **Pending** |
+| **14:57:45** | Alert changed to **Firing** |
+| **14:57:50** | Webhook notification received |
+| **14:58:10** | Runbook execution started |
+| **14:59:20** | Root cause identified (Payments service) |
+| **15:00:05** | Fix applied (`PAYMENT_FAILURE_RATE=0.0`) |
+| **15:02:30** | Alert resolved |
 
-Resolution:
-Check postgres and restart events
+---
 
-Escalation:
-If unresolved in 10 minutes → notify team lead.
+## Result
 
-============================================================
-4. Incident Simulation & Response
-============================================================
+From failure injection to alert firing took approximately **5 minutes 45 seconds**.
 
-Failure Injection:
+The delay is expected because Grafana evaluates alerts periodically and requires a pending period before firing. This configuration intentionally reduces false positives while slightly increasing detection time.
 
-# High failure rate injection
-PAYMENT_FAILURE_RATE=0.8 docker compose -f docker-compose.yaml -f ../docker-compose.monitoring.yaml up -d payments
+---
 
-Timeline
+# 5. Proofs
 
-14:52:00
-Injected failure (PAYMENT_FAILURE_RATE=0.8)
+The following requirements were successfully completed:
 
-14:55:12
-Alert entered Pending state
+- ✅ Alert rules created in Grafana
+- ✅ Alert rules tested successfully
+- ✅ Webhook notification received
+- ✅ JSON payload captured
+- ✅ Runbook followed during a real incident
 
-14:57:45
-Alert Firing (High Error Rate)
+---
 
-14:57:50
-Webhook notification received
+# Task 2 — Blameless Postmortem
 
-14:58:10
-Started following runbook
+## Incident
 
-14:59:20
-Root cause identified (Payments service)
+**High Error Rate Due to Payments Service Degradation**
 
-15:00:05
-Fix applied (PAYMENT_FAILURE_RATE=0.0)
+| Field | Value |
+|-------|-------|
+| **Date** | June 17, 2026 |
+| **Duration** | 10 minutes 30 seconds |
+| **Severity** | SEV-3 |
+| **Author** | Ravil Khusnutdinov |
 
-15:02:30
-Alert resolved to Normal
+---
 
-Answer:
+## Summary
 
-From failure injection to alert firing took approximately 5 minutes 45 seconds.
+A configuration change increased the **Payments failure rate to 80%**, resulting in elevated **5xx Gateway errors**.
 
-This delay comes from the evaluation interval plus pending period, which is intentional to reduce alert noise but trades off detection speed.
+The issue was detected automatically by the SLO-based alerting system and resolved by following the established runbook.
 
-============================================================
-5. Proofs
-============================================================
+---
 
-• Alert rules created and tested in Grafana.
-• Webhook notification received (JSON payload captured).
-• Runbook used during a real incident.
+## Timeline
 
-============================================================
-Task 2 — Blameless Postmortem
-============================================================
+The incident timeline is identical to the simulation described above.
 
-Postmortem:
-High Error Rate Due to Payments Service Degradation
+---
 
-Date:
-June 17, 2026
+## Root Cause
 
-Duration:
-10 minutes 30 seconds
+The monitoring system lacked a dedicated low-level alert for the Payments service.
 
-Severity:
-SEV-3 (Degraded user experience)
+As a result, the degradation propagated until it became visible through Gateway error rates.
 
-Author:
-Ravil Khusnutdinov
+Although the High Error Rate alert correctly detected the issue, the configured pending period delayed notification.
 
-------------------------------------------------------------
-Summary
-------------------------------------------------------------
+---
 
-A configuration change increased the payments failure rate to 80%, causing elevated 5xx errors at the gateway level. The issue was detected by our SLO-based alerting and resolved following the runbook.
+## What Went Well
 
-------------------------------------------------------------
-Timeline
-------------------------------------------------------------
+- Alerting system detected the incident automatically.
+- Webhook notification arrived immediately.
+- Runbook provided clear diagnostic steps.
+- Root cause was identified quickly.
+- Recovery was completed within minutes.
 
-See the incident timeline above.
+---
 
-------------------------------------------------------------
-Root Cause
-------------------------------------------------------------
+## What Went Wrong
 
-Lack of a dedicated low-level alert on the payments service failure rate allowed the degradation to propagate to the gateway. The existing high error rate alert worked, but the pending period introduced detection delay.
+- No service-specific alert for Payments failures.
+- Two-minute pending period delayed detection.
+- Runbook lacked configuration and environment variable checks.
 
-------------------------------------------------------------
-What Went Well
-------------------------------------------------------------
+---
 
-• Alerting system successfully caught the issue.
-• Runbook provided clear diagnostic steps.
-• Webhook notification worked immediately.
-• Quick recovery once investigation started.
+## Action Items
 
-------------------------------------------------------------
-What Went Wrong
-------------------------------------------------------------
+| Action | Owner | Priority | Status |
+|---------|-------|----------|--------|
+| Create dedicated alert for `PAYMENT_FAILURE_RATE` | Ravil | High | To Do |
+| Reduce pending period to 90 seconds | Ravil | High | To Do |
+| Extend runbook with configuration checks | Ravil | Medium | To Do |
+| Add automated tests for failure injection | Team | Low | To Do |
 
-• No service-specific failure rate alert.
-• Pending period (2 minutes) delayed detection.
-• Runbook did not include direct environment variable inspection.
+---
 
-------------------------------------------------------------
-Action Items
-------------------------------------------------------------
+## Most Important Action Item
 
-Action:
-Create dedicated alert for PAYMENT_FAILURE_RATE impact
+**Create a dedicated Payments failure rate alert.**
 
-Owner:
-Ravil
+### Reason
 
-Priority:
-High
+A service-specific alert would detect degradation before it impacts Gateway availability, SLO compliance, and user experience, significantly reducing mean time to detection (MTTD).
 
-Status:
-To Do
+---
 
+# Bonus Task — Cross-Tested Runbook
 
-Action:
-Reduce pending period for critical alerts to 90s
+## Second Runbook
 
-Owner:
-Ravil
+### Redis Unavailable (Reservations Failing)
 
-Priority:
-High
+### Alert
 
-Status:
-To Do
+High Redis error rate or Redis connection failures.
 
+---
 
-Action:
-Enhance runbook with env var and config checks
+## Diagnosis
 
-Owner:
-Ravil
+### Verify Redis health
 
-Priority:
-Medium
-
-Status:
-To Do
-
-
-Action:
-Add unit tests for failure rate injection
-
-Owner:
-Team
-
-Priority:
-Low
-
-Status:
-To Do
-
-Most important action item:
-
-Creating a dedicated payments failure rate alert.
-
-Why?
-
-It enables faster detection of isolated service degradation before it affects overall SLOs and user experience.
-
-============================================================
-Bonus Task — Cross-Tested Runbook
-============================================================
-
-Second Runbook:
-Redis Unavailable (Reservations Failing)
-
-Alert:
-High Redis error rate or connection failures.
-
-Diagnosis:
-
-1. Check Redis health:
+```bash
 docker compose exec redis redis-cli ping
+```
 
-2. Check gateway/events logs for Redis connection errors.
+### Check application logs
 
-3. Verify Redis pod status in Kubernetes or Docker.
+Inspect Gateway and Events logs for Redis connection errors.
 
-Fixes:
+### Verify service status
 
-• Restart Redis container.
-• Check network connectivity.
-• Scale Redis if under high load.
+Ensure Redis is running correctly in Docker or Kubernetes.
 
-Cross-testing result:
+---
 
-A classmate successfully diagnosed and fixed the Redis failure using only this runbook in 4 minutes.
+## Resolution
 
-Feedback:
+- Restart Redis container.
+- Verify network connectivity.
+- Scale Redis if experiencing high load.
 
-"Missing check for Redis memory usage."
+---
 
-Update made:
+## Cross-Test Result
 
-Added section:
-"Check Redis memory usage with docker stats."
+A classmate successfully diagnosed and resolved the Redis outage using only this runbook.
+
+**Time to recovery:** **4 minutes**
+
+### Feedback Received
+
+> Missing check for Redis memory usage.
+
+### Improvement Added
+
+The runbook was updated with an additional verification step:
+
+```bash
+docker stats
+```
+
+to monitor Redis memory consumption.
+
+---
+
+# Conclusion
+
+This lab demonstrated a complete incident response workflow including:
+
+- Grafana alert creation
+- PromQL-based monitoring
+- Webhook notifications
+- Incident response using a structured runbook
+- Blameless postmortem analysis
+- Continuous improvement through actionable follow-up tasks
+
+The monitoring configuration successfully detected service degradation, enabling rapid diagnosis and recovery while identifying opportunities to further reduce detection time in future incidents.
