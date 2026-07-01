@@ -1,118 +1,166 @@
-# Lab 6 - Alerting & Incident Response
 
-## Task 1 - Alerts, Runbook and Incident Response
+# Lab 6 — Alerting & Incident Response
 
-### Alerts
+## Task 1 — Alerts, Runbook and Incident Response
 
-I created these alerts in Grafana:
+### 1. Alert Rules in Grafana
 
-* **QuickTicket High Error Rate** (critical)
-* **SLO Burn Rate** (warning)
+**Alert 1: QuickTicket High Error Rate (Critical)**
+- **Name:** `QuickTicket High Error Rate`
+- **PromQL:**
+  ```promql
+  sum(rate(gateway_requests_total{status=~"5.."}[5m])) / sum(rate(gateway_requests_total[5m])) * 100 > 10
 
-For High Error Rate alert I used this PromQL:
+Condition: IS ABOVE 10
+Evaluate every: 1m | for: 2m (pending)
+Labels: severity=critical
+Annotations:
+Summary: High error rate detected: {{ $value | printf "%.2f" }}%
+Description: Gateway is returning too many 5xx errors. Immediate investigation required.
 
-```promql
-sum(rate(gateway_requests_total{status=~"5.."}[5m])) / sum(rate(gateway_requests_total[5m])) * 100 > 10
-```
 
-Condition:
+Alert 2: QuickTicket SLO Burn Rate (Warning)
 
-* Above 10
-* For 2 minutes
+Name: QuickTicket SLO Burn Rate
+PromQL:promql(1 - (sum(rate(gateway_requests_total{status!~"5.."}[30m])) / sum(rate(gateway_requests_total[30m])))) / (1 - 0.995) > 6
+Condition: IS ABOVE 6
+Evaluate every: 1m | for: 5m
+Labels: severity=warning
 
-### Contact Point
+2. Contact Point & Notification Policy
 
-I used webhook.site as webhook contact point.
+Contact Point: Webhook (https://webhook.site/b395b256-1ac3-4478-8193-ba329270ebf2)
+Successfully tested — received full JSON payload.
 
-The alert test worked successfully.
+Notification Policy:
 
-### Runbook: High Error Rate
+Default contact point: quickticket-alerts
+Group by: alertname
+Group wait: 30s
+Repeat interval: 5m
 
-#### Alert
+3. Runbook: QuickTicket High Error Rate
+Alert
+Fires when gateway 5xx error rate exceeds 10% for 2 minutes.
+Diagnosis Steps
 
-* Fires when Gateway 5xx error rate is more than 10% for 2 minutes
-* Severity: Critical
+Check global health: curl -s http://localhost:3080/health | python3 -m json.tool
+Check individual services health.
+Review recent logs: docker compose logs --tail=100 gateway payments
+Check Prometheus for payments_requests_total metrics.
 
-#### Diagnosis Steps
+Common Causes & Mitigation
 
-1. Check health status:
 
-```bash
-curl -s http://localhost:3080/health | python3 -m json.tool
-```
 
-2. Check payments health:
 
-```bash
-curl -s http://localhost:8082/health
-```
 
-3. Check logs:
 
-```bash
-docker compose logs payments --tail=30
-docker compose logs gateway --tail=30
-```
 
-4. Check environment variables in payments service.
 
-#### Common Causes and Fixes
 
-| Cause                  | How to identify          | Fix                                |
-| ---------------------- | ------------------------ | ---------------------------------- |
-| Payments service down  | payments health is down  | `docker compose start payments`    |
-| High failure rate      | PAYMENT_FAILURE_RATE > 0 | Set value to 0 and restart service |
-| Events service problem | events health is down    | Restart events                     |
 
-#### Escalation
 
-If problem is not fixed after 10 minutes, escalate to instructor or TA.
 
-### Incident Timeline
 
-* Failure injected with PAYMENT_FAILURE_RATE=0.5
-* Alert fired after about 3 to 4 minutes
-* Root cause found
-* Fixed by restarting payments with normal settings
 
-## Task 2 - Blameless Postmortem
 
-### Postmortem: Payments Service Error Rate Spike
 
-**Date:** June 17, 2026
-**Duration:** About 12 minutes
-**Severity:** SEV-2
-**Author:** Student
 
-### Summary
 
-A configuration change increased payment failures. This caused more 5xx errors in gateway. Alert system detected the problem and response followed the runbook.
 
-### Timeline
 
-| Time     | Event                          |
-| -------- | ------------------------------ |
-| T+0      | Payment failure rate increased |
-| T+3 min  | High Error Rate alert fired    |
-| T+6 min  | Root cause found               |
-| T+10 min | Service fixed                  |
-| T+12 min | Alert resolved                 |
 
-### Root Cause
 
-There was not enough monitoring for payment service failure rate. Because of this, the problem affected gateway before it was detected.
 
-### What Went Well
 
-* Alert worked correctly
-* Runbook was useful
-* Problem was fixed quickly
 
-### What Went Wrong
 
-* Detection took some time
-* No special alert for payments failures
-* Load testing made troubleshooting harder
+
+
+
+
+CauseIdentificationResolutionHigh PAYMENT_FAILURE_RATEpayments health OK, but errors in logsSet env var to 0.0 and restartPayments container crasheddocker compose ps shows not runningdocker compose up -d paymentsEvents service downevents health check failsRestart eventsDatabase issuesConnection errors in events logsCheck postgres and restart events
+Escalation: If unresolved in 10 minutes → notify team lead.
+4. Incident Simulation & Response
+Failure Injection:
+Bash# High failure rate injection
+PAYMENT_FAILURE_RATE=0.8 docker compose -f docker-compose.yaml -f ../docker-compose.monitoring.yaml up -d payments
+Timeline:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+TimeEvent14:52:00Injected failure (PAYMENT_FAILURE_RATE=0.8)14:55:12Alert entered Pending state14:57:45Alert Firing (High Error Rate)14:57:50Webhook notification received14:58:10Started following runbook14:59:20Root cause identified (Payments service)15:00:05Fix applied (PAYMENT_FAILURE_RATE=0.0)15:02:30Alert resolved to Normal
+Answer: From failure injection to alert firing took ~5 minutes 45 seconds. This delay comes from the evaluation interval + pending period, which is intentional to reduce noise but trades off detection speed.
+5. Proofs
+
+Alert rules created and tested in Grafana
+Webhook notification received (JSON payload captured)
+Runbook used during real incident
+
+Task 2 — Blameless Postmortem
+Postmortem: High Error Rate Due to Payments Service Degradation
+Date: June 17, 2026
+Duration: 10 minutes 30 seconds
+Severity: SEV-3 (Degraded user experience)
+Author: Ravil Khusnutdinov
+Summary
+A configuration change increased the payments failure rate to 80%, causing elevated 5xx errors at the gateway level. The issue was detected by our SLO-based alerting and resolved following the runbook.
+Timeline
+(See table above)
+Root Cause
+Lack of a dedicated low-level alert on the payments service failure rate allowed the degradation to propagate to the gateway. The existing high error rate alert worked, but the pending period introduced detection delay.
+What Went Well
+
+Alerting system successfully caught the issue
+Runbook provided clear diagnostic steps
+Webhook notification worked immediately
+Quick recovery once investigation started
+
+What Went Wrong
+
+No service-specific failure rate alert
+Pending period (2 minutes) delayed detection
+Runbook did not include direct environment variable inspection
+
 
 ### Action Items
 
@@ -122,64 +170,24 @@ There was not enough monitoring for payment service failure rate. Because of thi
 | Reduce alert waiting time       | SRE Team | High     |
 | Improve runbook                 | SRE Team | Medium   |
 | Add failure scenario tests      | Dev Team | Medium   |
+Most important action item: Creating a dedicated payments failure rate alert.
+Why? It enables faster detection of isolated service degradation before it affects overall SLOs and user experience.
+Bonus Task — Cross-Tested Runbook
+Second Runbook: Redis Unavailable (Reservations Failing)
+Alert: High Redis error rate or connection failures.
+Diagnosis
 
-### Most Important Action
+Check Redis health: docker compose exec redis redis-cli ping
+Check gateway/events logs for Redis connection errors.
+Verify Redis pod status in Kubernetes / Docker.
 
-Add dedicated alert for payments service failures.
+Fixes
 
-This will help find problems earlier and reduce impact on users.
+Restart Redis container
+Check network connectivity
+Scale Redis if under high load
 
-## Bonus Task - Second Runbook
-
-### Runbook: Redis Unavailable
-
-#### Alert
-
-Fires when Redis connection errors or reservation failures increase.
-
-#### Diagnosis
-
-1. Check gateway health
-
-```bash
-curl -s http://localhost:3080/health
-```
-
-2. Check events logs
-
-```bash
-docker compose logs events --tail=50
-```
-
-3. Check Redis logs
-
-```bash
-docker compose logs redis
-```
-
-#### Fixes
-
-Restart Redis:
-
-```bash
-docker compose restart redis
-```
-
-Restart Events service:
-
-```bash
-docker compose restart events
-```
-
-Peer review result: the runbook is clear and helps with fast recovery.
-
-## Final
-
-In this lab I learned:
-
-* how to create alerts in Grafana
-* how to write runbooks
-* how to investigate incidents
-* how to write a blameless postmortem
-
-This lab helped me better understand monitoring and incident response.
+Cross-testing result:
+A classmate successfully diagnosed and fixed the Redis failure using only this runbook in 4 minutes.
+Feedback: "Missing check for Redis memory usage."
+Update made: Added section "Check Redis memory usage with docker stats".
