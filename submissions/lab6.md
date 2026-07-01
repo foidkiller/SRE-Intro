@@ -1,11 +1,6 @@
 # Lab 6 — Alerting & Incident Response
 
-> **Course:** DevOps / Monitoring & Observability  
-> **Lab:** 6  
-> **Student:** Ravil Khusnutdinov  
-> **Date:** June 17, 2026
 
----
 
 # Task 1 — Alerts, Runbook and Incident Response
 
