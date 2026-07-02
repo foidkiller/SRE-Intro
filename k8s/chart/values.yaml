@@ -1,0 +1,19 @@
+gateway:
+  image: quickticket-gateway:v1
+  replicas: 1
+
+events:
+  image: quickticket-events:v1
+  replicas: 1
+
+payments:
+  image: quickticket-payments:v1
+  replicas: 1
+
+postgres:
+  image: postgres:17-alpine
+  replicas: 1
+
+redis:
+  image: redis:7-alpine
+  replicas: 1
